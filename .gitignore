@@ -1,0 +1,9 @@
+*
+
+!.gitignore
+!LICENSE
+!README.md
+!default.nix
+!flake.nix
+!flake.lock
+!henchman.nu
