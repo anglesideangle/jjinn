@@ -58,6 +58,8 @@ makeScope newScope (
           bash
           jujutsu
           opencode
+          coreutils
+          curl
         ];
       in
       pkgs.stdenvNoCC.mkDerivation {

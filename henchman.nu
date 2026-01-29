@@ -5,25 +5,25 @@ const OPENCODE_CONFIG = {
   instructions: ["/INSTRUCTIONS.md"]
 }
 
+def sh_quote [s: string]: nothing -> string {
+  if ($s | str contains "'") {
+    let parts = ($s | split row "'")
+    $"'" + ($parts | str join "'\"'\"'") + "'"
+  } else {
+    $"'" + $s + "'"
+  }
+}
+
+def render_scalar [name: string, type: string, val: string]: nothing -> list<string> {
+  [ $"($name)=((sh_quote $val))" ] | append (if $type == "exported" {[$"export ($name)"]} else {[]})
+}
+
+def render_array [name: string, items: list<any>]: nothing -> list<string> {
+  let elems = ($items | each {|x| sh_quote ($x | into string) } | str join " ")
+  [ $"declare -a ($name)=\(($elems)\)" ]
+}
+
 def render_dev_env [dev_env: record]: nothing -> string {
-  def sh_quote [s: string]: nothing -> string {
-    if ($s | str contains "'") {
-      let parts = ($s | split row "'")
-      $"'" + ($parts | str join "'\"'\"'") + "'"
-    } else {
-      $"'" + $s + "'"
-    }
-  }
-
-  def render_scalar [name: string, type: string, val: string]: nothing -> list<string> {
-    [ $"($name)=((sh_quote $val))" ] | append (if $type == "exported" {[$"export ($name)"]} else {[]})
-  }
-
-  def render_array [name: string, items: list<any>]: nothing -> list<string> {
-    let elems = ($items | each {|x| sh_quote ($x | into string) } | str join " ")
-    [ $"declare -a ($name)=(($elems))" ]
-  }
-
   let var_lines = (
     $dev_env.variables
     | transpose name rec
@@ -44,7 +44,7 @@ def render_dev_env [dev_env: record]: nothing -> string {
       | transpose fname body
       | each {|r|
           [
-            $"($r.fname) ()"
+            $"($r.fname) \(\)"
             "{"
             ($r.body | into string)
             "}"
@@ -111,11 +111,7 @@ You are running inside a sandbox created by `henchman edit`.
 
 # Returns a single revision id from a revset string.
 def revset_id [revset: string] {
-  let ids = (do {
-      ^jj log -r $revset --no-graph --template "commit_id.short() ++ \"\\n\""
-    }
-    | lines
-  )
+  let ids =  ^jj log -r $revset --no-graph --template "commit_id.short() ++ \"\\n\"" | lines
 
   if ($ids | length) != 1 {
     error make { msg: $"Revset ($revset) must resolve to exactly one commit." }
@@ -140,9 +136,12 @@ def edit_worktree [
   }
 
   try {
-    ^jj workspace add --name $short_id --revision $revset $worktree
+    ^jj workspace add --name $short_id --revision $revset $worktree | complete
     do $command $worktree
-  } catch { $cleanup }
+  } catch { |err: error|
+    print $err.rendered
+    $cleanup
+  }
 
   do $cleanup
 }
@@ -171,42 +170,42 @@ def bwrap_run [revset: string, share_net: bool, share_dev: bool, ...args: string
   mut dev_env = $dev_json.stdout | from json
 
   let anchor = (^readlink --canonicalize $profile) | str trim
-  let sandbox_inputs = $env.SANDBOX_INPUTS | lines
+  let sandbox_inputs = $env.SANDBOX_INPUTS? | default "" | lines
   let closure = nix_closure $anchor ...$sandbox_inputs
 
   let shell_path = $dev_env.variables.SHELL.value
+  let user_xdg_cfg = $env.XDG_CONFIG_HOME? | default ($env.HOME | path join ".config")
+  let sandbox_home = $dev_env.variables.HOME.value
 
   # prepend the path
   let extra_bins = $sandbox_inputs | each {|p| $"($p)/bin" }
   $dev_env.variables.PATH.value = $dev_env.variables.PATH.value | prepend_path $extra_bins
 
-  let dev_script = render_dev_env $dev_env
+  let init_path = $repo_meta | path join "activate.sh"
+  $"(render_dev_env $dev_env)\nexec \"$@\"" | save --force $init_path
 
-  let bwrap_args = ([
+  let bwrap_args = { |worktree| [
     "--unshare-all"
     "--die-with-parent"
-    # "--new-session"
-    "--clearenv"
+    # "--clearenv"
     "--proc" "/proc"
     "--tmpfs" "/tmp"
-    # "--bind" $worktree "/workspace"
+    "--bind" $worktree "/workspace"
     "--chdir" "/workspace"
     "--setenv" "HOME" "/workspace"
-    # "--setenv" "OPENCODE_CONFIG_CONTENT" ($OPENCODE_CONFIG | to json -r)
     "--ro-bind" $repo_root $repo_root
+    # "--setenv" "OPENCODE_CONFIG_CONTENT" ($OPENCODE_CONFIG | to json -r)
+    "--ro-bind" ($user_xdg_cfg | path join "opencode") ($sandbox_home | path join ".config" "opencode")
     "--bind" ($repo_root | path join ".jj") ($repo_root | path join ".jj")
     # "--ro-bind" $instructions_path "/INSTRUCTIONS.md"
   ] | append ($closure | each { |path| [ "--ro-bind" $path $path ] } | flatten)
-    # | append ($exported_vars | where k != "PATH" | each {|kv| [ "--setenv" $kv.k $kv.v] } | flatten)
-    | append (if $share_net {["--share-net"]} else {[]})
-    | append (if $share_dev {["--dev-bind" "/dev" "/dev"]} else {["--dev"]})
-    # | append [ "--" $shell_path $"($dev_script)\n(...$args)"]
-    )
+    | append (if $share_net {["--share-net" "--ro-bind" "/etc/resolv.conf" "/etc/resolv.conf" "--ro-bind" "/etc/hosts" "/etc/hosts" ]} else {[]})
+    | append (if $share_dev {["--dev-bind" "/dev" "/dev"]} else {["--dev" "/dev"]})
+    | append [ $shell_path $init_path ]
+    | append $args
+  }
 
-  let ws_arg = { |worktree| ["--bind" $worktree "/workspace"] }
-  let shell_cmd = [$shell_path "-c" $dev_script ...$args]
-
-  edit_worktree $revset { |worktree| ^bwrap ...$bwrap_args (...$ws_arg worktree) $shell_cmd}
+  edit_worktree $revset { |worktree| ^bwrap ...(do $bwrap_args $worktree) }
 }
 
 
@@ -218,7 +217,7 @@ def "main edit" [revset: string = "@", --network = true, --dev = false] {
 
 # testing with shell
 def "main shell" [revset: string = "@", --network = true, --dev = false] {
-  bwrap_run $revset $network $dev
+  bwrap_run $revset $network $dev "bash" "-i"
 }
 
 
