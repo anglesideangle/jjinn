@@ -57,9 +57,15 @@ makeScope newScope (
         sandboxInputs = with pkgs; [
           bash
           jujutsu
+          nix
           opencode
           coreutils
           curl
+          which
+          findutils
+          diffutils
+          gnupatch
+          gnugrep
         ];
       in
       pkgs.stdenvNoCC.mkDerivation {
@@ -76,7 +82,6 @@ makeScope newScope (
           with pkgs;
           [
             bubblewrap
-            nix
           ]
           ++ sandboxInputs;
 
