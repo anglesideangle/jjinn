@@ -52,7 +52,6 @@ lib.makeScope pkgs.newScope (self: {
     inputsFrom = [ self.packages'.default ];
     packages = [
       self.formatter
-      pkgs.nufmt
     ];
   };
 
@@ -61,18 +60,12 @@ lib.makeScope pkgs.newScope (self: {
 
     runtimeInputs = with pkgs; [
       nixfmt
-      nufmt
     ];
 
     settings = {
       formatter.nix = {
         command = "nixfmt";
         includes = [ "*.nix" ];
-      };
-
-      formatter.nu = {
-        command = "nufmt";
-        includes = [ "*.nu" ];
       };
     };
   };
