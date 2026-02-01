@@ -10,11 +10,11 @@
         "aarch64-darwin"
       ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
-      workspace = forAllSystems (system: import ./. { inherit nixpkgs system; });
+      workspace = forAllSystems (system: import ./. { pkgs = nixpkgs.legacyPackages.${system}; });
     in
     {
-      packages = forAllSystems (system: workspace.${system}.packages);
-      devShells = forAllSystems (system: workspace.${system}.devShells);
+      packages = forAllSystems (system: workspace.${system}.packages');
+      devShells = forAllSystems (system: workspace.${system}.shells);
       formatter = forAllSystems (system: workspace.${system}.formatter);
 
     };
