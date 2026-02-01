@@ -1,8 +1,11 @@
 #!/usr/bin/env nu
-# const OPENCODE_CONFIG = {
-#   "$schema": "https://opencode.ai/config.json"
-#   instructions: ["/INSTRUCTIONS.md"]
-# }
+
+def --wrapped nix [...args: string] {
+  (^nix
+    --option warn-dirty "false"
+    --extra-experimental-features "nix-command flakes"
+    ...$args)
+}
 
 # Safetly quote bash string
 def sh_quote [s: string] {
@@ -66,26 +69,8 @@ def repo_root [] {
 
 # Returns the closure of a list of nix derivations as a list of paths.
 def nix_closure [...anchors: string] {
-  ^nix path-info --recursive ...$anchors | lines
+  nix path-info --recursive ...$anchors | lines
 }
-
-# def render_instructions [store_paths] {
-#   const INSTRUCTIONS_TEMPLATE = "
-# # Environment Details
-# You are running inside a sandbox created by `henchman edit`.
-# ## Workflow
-# - Use `jj describe` to record changes as you make progress.
-# - Use `jj new` or `jj edit` if you need to restructure commits.
-# - Run `nix build` and `nix flake check` for the relevant changed code before you finish, ensure all tests pass.
-# ## Environment
-# - The repository metadata (`.jj`) is mounted so changes persist.
-# - `/workspace` is writable and is the only checkout you should modify.
-# ## Available Nix Store Paths
-# {{PATHS}}
-#   "
-#   let tools = ($store_paths | each { |path| $"- ($path)" } | str join "\n")
-#   $INSTRUCTIONS_TEMPLATE | str replace "{{TOOLS}}" $tools
-# }
 
 # Returns a single revision id from a revset string.
 def revset_id [revset: string] {
@@ -105,7 +90,9 @@ def edit_worktree [
   let short_id = (revset_id $revset)
   let worktree = (mktemp --tmpdir --directory)
 
+  # Ensure the workspace syncs with the main repo, then delete the workspace.
   let cleanup = {
+    do { cd $worktree; jj status | complete }
     ^jj workspace forget $short_id
     rm -r $worktree
   }
@@ -143,24 +130,53 @@ def get_xdg_dirs [environment: record] {
   }
 }
 
-# Runs the provided `cmd` inside a bwrap sandbox with a worktree and closure.
-def bwrap_run [
-  revset: string
-  share_net: bool
-  share_dev: bool
-  ...cmd: string
-] {
+
+# Spawns a command in a sandbox containing the devshell from this project's
+# `flake.nix` and the specified jj revision.
+@example "Edit the current revision" {jjinn}
+@example "Edit the previous commit using the my-package devshell output" {jjinn @- --devshell "my-package"}
+@example "Debug using an interactive shell inside the sandbox" {jjinn @ -- "bash" "-i"}
+def --wrapped main [
+  revset: string = @, # The revision to edit in the worktree environment.
+  --devshell = "default", # The devshell output to target.
+  --network = true, # Whether to allow network access from the sandbox.
+  --dev = false, # Whether to mount devices into the sandbox.
+  --debug, # Prints the bwrap command instead of executing it.
+  ...cmd: string, # The command to execute in the sandbox.
+]: nothing -> nothing {
+  let exec = if ($cmd | is-empty) { [ $env.DEFAULT_EXE ] } else { $cmd }
+
   let repo_root = (repo_root)
-  let repo_meta = $repo_root | path join ".henchman"
+  let repo_meta = $repo_root | path join ".jjinn"
   mkdir $repo_meta
 
   let profile = $repo_meta | path join "profile"
-  mut dev_env = (^nix print-dev-env --json --profile $profile $"($repo_root)#") | from json
+  mut env_result = (nix print-dev-env --json --profile $profile $"($repo_root)#($devshell)") | complete
+
+  if $env_result.exit_code != 0 {
+    error make {
+      msg: "Nix print-dev-env failed"
+      label: {
+        text: $"devshell=($devshell) profile=($profile)"
+        span: (metadata $env_result).span
+      }
+      help: $env_result.stderr
+    }
+  }
+
+  mut dev_env = $env_result.stdout | from json
 
   let anchor = (^readlink --canonicalize $profile) | str trim
   let sandbox_inputs = $env.SANDBOX_INPUTS? | default "" | lines
   let closure = nix_closure $anchor ...$sandbox_inputs
-  let shell_path = $dev_env.variables.SHELL.value? | default $env.FALLBACK_BASH
+
+  let shell_path = (
+      match $dev_env.variables.SHELL.value? {
+        "/noshell" => null
+        $shell => $shell
+      }
+      | default $env.FALLBACK_BASH
+  )
 
   let extra_bins = $sandbox_inputs | each {|p| $"($p)/bin" }
   $dev_env.variables.PATH.value = $dev_env.variables.PATH.value | prepend_path $extra_bins
@@ -177,26 +193,28 @@ def bwrap_run [
     | each { |path| [ "--ro-bind" $path $path ] }
     | flatten
 
-  let net_args = if $share_net { [
+  let net_args = if $network { [
     "--share-net"
     "--ro-bind" "/etc/resolv.conf" "/etc/resolv.conf"
     "--ro-bind" "/etc/hosts" "/etc/hosts"
     "--overlay-src" "/etc/ssl" "--tmp-overlay" "/etc/ssl"
   ] } else { [] }
 
-  let dev_args = if $share_dev {
+  let dev_args = if $dev {
     ["--dev-bind", "/dev", "/dev"]
   } else { ["--dev", "/dev"] }
 
-  let xdg_args = $user_xdg
-    | join $sandbox_xdg key
-    | compact --empty
-    | each {|r| [
-        "--bind"
-        ($r.user | path join "opencode")
-        ($r.sandbox | path join "opencode")
-      ]}
-    | flatten
+  let xdg_args = if $env.XDG_NAME? != null {
+    $user_xdg
+      | join $sandbox_xdg key
+      | compact --empty
+      | each {|r| [
+          "--bind"
+          ($r.user | path join $env.XDG_NAME)
+          ($r.sandbox | path join $env.XDG_NAME)
+        ]}
+      | flatten
+  } else { [] }
 
   let bwrap_args = {|worktree|
     [
@@ -208,7 +226,7 @@ def bwrap_run [
       "--chdir" "/workspace"
       "--ro-bind" $repo_root $repo_root
       "--bind" ($repo_root | path join ".jj") ($repo_root | path join ".jj")
-      "--bind" ($repo_root | path join ".git") ($repo_root | path join ".git")
+      "--bind-try" ($repo_root | path join ".git") ($repo_root | path join ".git")
     ]
     | append $closure_args
     | append $net_args
@@ -216,25 +234,11 @@ def bwrap_run [
     | append $xdg_args
     | append $shell_path
     | append $init_path
-    | append $cmd
+    | append $exec
   }
-  edit_worktree $revset {|worktree| ^bwrap ...(do $bwrap_args $worktree) }
-}
-
-# Spawns opencode in a sandbox containing the devshell from this project's `flake.nix` and the specified jj revision.
-def "main" [
-  revset: string = @, # The revision to edit in the worktree environment.
-  --network = true, # Whether to allow network access from the sandbox. This is recommended as opencode currently tries to install bun modules at runtime.
-  --dev = false, # Whether to mount devices into the sandbox.
-] {
-  bwrap_run $revset $network $dev opencode
-}
-
-# Enters the sandbox environment with an interactive shell.
-def "main debug" [
-  revset: string = @, # The revision to edit in the worktree environment.
-  --network = true, # Whether to allow network access from the sandbox. This is recommended as opencode currently tries to install bun modules at runtime.
-  --dev = false, # Whether to mount devices into the sandbox.
-] {
-  bwrap_run $revset $network $dev "bash" "-i"
+  if $debug {
+    print (do $bwrap_args "<worktree>")
+  } else {
+    edit_worktree $revset {|worktree| ^bwrap ...(do $bwrap_args $worktree) }
+  }
 }

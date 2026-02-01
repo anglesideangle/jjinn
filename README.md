@@ -1,23 +1,10 @@
-# Henchman
+# Jjinn
 
-Henchman is a simple manager for agentic coding tools that runs opencode in a bwrap sandbox backed by a temporary jj workspace.
-It is designed to work with nix projects, and uses the contents of your project's `#devShells.${system}.default` to build the sandbox environment.
+Jjinn is a minimal tool for nix projects that runs [opencode](https://opencode.ai/) sandboxed inside in an ephemeral [jj](https://jj-vcs.dev/) workspace.
+It uses the contents of your project's `devShells` to construct the sandbox environment using `bwrap`.
 
-I developed this tool for my personal workflow.
-Feel free to use it, contribute fixes, copy the code, etc.
-
-## Usage
+## Workflow
 
 ```nushell
-henchman edit [revset] --network true --dev false
+jjinn @
 ```
-
-```nushell
-henchman shell [revset] --network true --dev false
-```
-
-## Future stuff?
-
-- [ ] config.toml
-- [ ] support `project.nix` in addition to `flake.nix`
-  - actually finish `project.nix` cli
