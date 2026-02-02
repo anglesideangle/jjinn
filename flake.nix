@@ -17,9 +17,9 @@
         pkgs:
         {
           executable,
-          xdgName ? executable.mainProgram,
-          sandboxInputs ? [ ],
+          sandboxInputs ? [],
           homeBinds ? [],
+          xdgBinds ? [],
         }:
         let
           inherit (nixpkgs) lib;
@@ -53,8 +53,8 @@
                 --set SANDBOX_INPUTS "${lib.concatStringsSep "\n" sandboxInputsFinal}" \
                 --set FALLBACK_BASH "${lib.getExe pkgs.bash}" \
                 --set HOME_BINDS "${lib.concatStringsSep "\n" homeBinds}" \
-                --set DEFAULT_EXE "${executable}" \
-                --set XDG_NAME "${xdgName}"
+                --set XDG_BINDS "${lib.concatStringsSep "\n" xdgBinds}" \
+                --set EXECUTABLE "${executable}"
           '';
         };
 
@@ -64,7 +64,6 @@
           inherit (nixpkgs) lib;
           jjinn-opencode = self.lib.makeJjinn pkgsFor.${system} {
             executable = lib.getExe pkgsFor.${system}.opencode;
-            xdgName = "opencode";
             sandboxInputs = with pkgsFor.${system}; [
               opencode
               nix
@@ -76,7 +75,8 @@
               gnupatch
               gnugrep
             ];
-            homeBinds = [ ".bun/install/cache" ];
+            xdgBinds = [ "opencode" ];
+            homeBinds = [ ".bun" ];
           };
         in
         {
@@ -88,7 +88,7 @@
       devShells.default = forAllSystems (
         system:
         pkgsFor.${system}.mkShellNoCC {
-          inputsFrom = [ self.packages'.default ];
+          inputsFrom = [ self.packages.default ];
           packages = [
             self.formatter
           ];

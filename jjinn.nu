@@ -145,7 +145,7 @@ def main [
   --interactive (-i), # Enters an interactive shell inside the sandbox instead
   # of the default executable.
 ]: nothing -> nothing {
-  let exec = if $interactive { [ "bash" "-i" ] } else { [ $env.DEFAULT_EXE ] };
+  let exec = if $interactive { [ "bash" "-i" ] } else { [ $env.EXECUTABLE ] };
 
   let repo_root = if $repo == null {
     ^jj root | str trim
@@ -182,11 +182,10 @@ def main [
   let closure = nix_closure $anchor ...$sandbox_inputs
 
   let shell_path = (
-      match $dev_env.variables.SHELL.value? {
-        "/noshell" => null
-        $shell => $shell
-      }
-      | default $env.FALLBACK_BASH
+    match $dev_env.variables.SHELL.value? {
+      "/noshell" => null
+      $shell => $shell
+    } | default $env.FALLBACK_BASH
   )
 
   let extra_bins = $sandbox_inputs | each {|p| $"($p)/bin" }
@@ -210,33 +209,43 @@ def main [
     ["--dev-bind", "/dev", "/dev"]
   } else { ["--dev", "/dev"] }
 
-  let xdg_args = if $env.XDG_NAME? != null {
-    let user_xdg = get_xdg_dirs $env | transpose key user
-    let sandbox_xdg = get_xdg_dirs {
-      HOME: $dev_env.variables.HOME.value
-    } | transpose key sandbox
+  let sandbox_env = $dev_env.variables
+    | transpose name rec
+    | where name in [
+        "HOME"
+        "XDG_CONFIG_HOME"
+        "XDG_DATA_HOME"
+        "XDG_STATE_HOME"
+        "XDG_CACHE_HOME"
+      ]
+    | reduce -f {} {|row, acc|
+      $acc | upsert $row.name $row.rec.value?
+    }
 
-    $user_xdg
-      | join $sandbox_xdg key
-      | compact --empty
-      | each {|r| [
-        "--bind-try"
-        ($r.user | path join $env.XDG_NAME)
-        ($r.sandbox | path join $env.XDG_NAME)
-      ]}
-      | flatten
-  } else { [] }
+  let user_xdg = get_xdg_dirs $env | transpose key user
+  let sandbox_xdg = get_xdg_dirs $sandbox_env | transpose key sandbox
+  let xdg_dirs = $user_xdg | join $sandbox_xdg key | compact --empty
 
-  let user_home = $env.HOME
-  let sandbox_home = $dev_env.variables.HOME.value
+  let xdg_bind_args = $env.XDG_BINDS
+    | default ""
+    | lines
+    | each { |program|
+        $xdg_dirs | each { |dir| [
+          "--bind-try"
+          ($dir.user | path join $program)
+          ($dir.sandbox | path join $program)
+        ]} | flatten
+      }
+    | flatten
 
-  let addl_bind_args = $env.HOME_BINDS?
-    | default []
+  let home_bind_args = $env.HOME_BINDS?
+    | default ""
+    | lines
     | each { |path| [
-      "--bind-try"
-      ($user_home | path join $path)
-      ($sandbox_home | path join $path)
-    ]}
+        "--bind-try"
+        ($env.HOME | path join $path)
+        ($sandbox_env.HOME | path join $path)
+      ]}
     | flatten
 
   let bwrap_args = {|worktree|
@@ -254,8 +263,8 @@ def main [
     | append $closure_args
     | append $net_args
     | append $dev_args
-    | append $xdg_args
-    | append $addl_bind_args
+    | append $xdg_bind_args
+    | append $home_bind_args
     | append $shell_path
     | append $init_path
     | append $exec

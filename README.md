@@ -1,6 +1,6 @@
 # Jjinn
 
-Jjinn is a script for nix projects that runs an executable sandboxed inside in an ephemeral [jj](https://jj-vcs.dev/) workspace.
+Jjinn is a script for nix projects that runs a program (such as [opencode](https://opencode.ai/)) sandboxed inside in an ephemeral [jj](https://jj-vcs.dev/) workspace.
 It uses the contents of your project's `devShells` to construct the sandbox environment using `bwrap`.
 
 ## Workflow
@@ -14,21 +14,22 @@ jjinn
 
 Edit from the previous commit in `./project` using the `my-package` devshell output:
 ```nushell
-jjinn @- --repo project --devshell "my-package"
+jjinn @- --repo ./project --devshell "my-package"
 ```
 
 ## Installation
 
 This project can be used as a flake from `github:anglesideangle/jjinn`. For example, `nix profile add github:anglesideangle/jjinn#jjinn-opencode`.
 
-The default jjinn configuration uses [opencode](https://opencode.ai/). However, it is not tightly coupled to opencode, and you can create your own package using this flake's `lib.makeJjinn` wrapper:
+The default jjinn configuration uses [opencode](https://opencode.ai/). However, it is not tightly coupled to opencode, and you can create your own package using this flake's `lib.makeJjinn` wrapper.
+
+Here is example configuration for claude code:
 
 ```nix
-jjinn-mytool = jjinn.lib.makeJjinn pkgs {
-  executable = lib.getExe pkgs.mytool;
-  xdgName = "mytoolname";
+jjinn.lib.makeJjinn pkgs {
+  executable = lib.getExe pkgs.claude-code;
   sandboxInputs = with pkgs; [
-    mytool
+    claude-code
     nix
     coreutils
     curl
@@ -39,7 +40,6 @@ jjinn-mytool = jjinn.lib.makeJjinn pkgs {
     gnugrep
     ...etc
   ];
-};
+  homeBinds = [ ".claude" ];
+}
 ```
-
-This probably won't work for claude code codex at the moment because they don't use xdg directories...
