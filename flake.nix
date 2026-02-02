@@ -27,7 +27,14 @@
         in
         pkgs.stdenvNoCC.mkDerivation {
           name = "jjinn";
-          version = "0.0.0";
+          version = "1.0.0";
+
+          meta = {
+            description = "Run a program sandboxed in an ephemeral jj workspace using a Nix devshell.";
+            homepage = "https://github.com/anglesideangle/jjinn";
+            license = lib.licenses.mit;
+            mainProgram = "jjinn";
+          };
 
           src = ./jjinn.nu;
 

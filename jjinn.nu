@@ -7,7 +7,7 @@ def --wrapped nix [...args: string] {
     ...$args)
 }
 
-# Safetly quote bash string
+# Safely quote bash string
 def sh_quote [s: string] {
   if ($s | str contains "'") {
     let parts = ($s | split row "'")
