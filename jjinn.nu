@@ -55,50 +55,47 @@ def render_dev_env [dev_env: record] {
   ($var_lines | append $fn_lines | str join "\n") + "\n"
 }
 
-# Returns the root of the current jj repository.
-#
-# Errors if the top level repo either does not exist or does not contain a `flake.nix`.
-def repo_root [] {
-  let root = ^jj root | str trim
-  let flake = ($root | path join "flake.nix")
-  if not ($flake | path exists) { error make {
-    msg: $"No flake.nix found at repo root ($root)."
-  } }
-  $root
-}
-
 # Returns the closure of a list of nix derivations as a list of paths.
 def nix_closure [...anchors: string] {
   nix path-info --recursive ...$anchors | lines
 }
 
 # Returns a single revision id from a revset string.
-def revset_id [revset: string] {
-  let ids = ^jj log -r $revset --no-graph --template "commit_id.short() ++ \"\\n\"" | lines
+def revset_id [repo: path, revset: string] {
+  let ids = (^jj log
+    --repository $repo
+    -r $revset
+    --no-graph
+    --template "commit_id.short() ++ \"\\n\""
+  ) | lines
   if ($ids | length) != 1 { error make {
     msg: $"Revset ($revset) must resolve to exactly one commit."
   } }
   $ids | first
 }
 
-# Runs the provided `command` inside the worktree.
+# Runs the provided `command` inside a temporary worktree.
+#
+# Syncs the worktree to the `repo` after `command` terminates, regardless of
+# success and then removes the worktree.
 def edit_worktree [
+  repo: path,
   revset: string, # The jj revset to create the worktree from.
   command: closure, # The closure to call with the constructed worktree's path.
 ]: nothing -> nothing {
-  let root = (repo_root)
-  let short_id = (revset_id $revset)
+
+  let short_id = (revset_id $repo $revset)
   let worktree = (mktemp --tmpdir --directory)
 
   # Ensure the workspace syncs with the main repo, then delete the workspace.
   let cleanup = {
-    do { cd $worktree; jj status | complete }
-    ^jj workspace forget $short_id
-    rm -r $worktree
+    jj status --repository $worktree | complete | ignore
+    ^jj workspace forget --repository $repo $short_id | ignore
+    rm -r $worktree | ignore
   }
 
   try {
-    ^jj workspace add --name $short_id --revision $revset $worktree
+    ^jj workspace add --repository $repo --name $short_id --revision $revset $worktree
     do $command $worktree
   } catch {|err|
     $cleanup
@@ -133,20 +130,34 @@ def get_xdg_dirs [environment: record] {
 
 # Spawns a command in a sandbox containing the devshell from this project's
 # `flake.nix` and the specified jj revision.
-@example "Edit the current revision" {jjinn}
-@example "Edit the previous commit using the my-package devshell output" {jjinn @- --devshell "my-package"}
+@example "Edit from the current revision" {jjinn}
+@example "Edit from the previous commit in `./project` using the `my-package` devshell output" {jjinn @- --repo project --devshell "my-package"}
 @example "Debug using an interactive shell inside the sandbox" {jjinn @ -- "bash" "-i"}
-def --wrapped main [
-  revset: string = @, # The revision to edit in the worktree environment.
-  --devshell = "default", # The devshell output to target.
+def main [
+  revision: string = @, # The parent revision of the the worktree environment.
+  --repo (-R): path, # The repository to operate on. It must contain a top level
+  # `flake.nix`. If left unspecified, the closest parent directory containing
+  # `.jj/` will be used.
+  --devshell (-s) = "default", # The devshell output to target.
   --network = true, # Whether to allow network access from the sandbox.
   --dev = false, # Whether to mount devices into the sandbox.
-  --debug, # Prints the bwrap command instead of executing it.
-  ...cmd: string, # The command to execute in the sandbox.
+  --print-bwrap, # Prints the bwrap command instead of executing it.
+  --interactive (-i), # Enters an interactive shell inside the sandbox instead
+  # of the default executable.
 ]: nothing -> nothing {
-  let exec = if ($cmd | is-empty) { [ $env.DEFAULT_EXE ] } else { $cmd }
+  let exec = if $interactive { [ "bash" "-i" ] } else { [ $env.DEFAULT_EXE ] };
 
-  let repo_root = (repo_root)
+  let repo_root = if $repo == null {
+    ^jj root | str trim
+  } else {
+    $repo
+  } | path expand
+
+  let flake = ($repo_root | path join "flake.nix")
+  if not ($flake | path exists) { error make {
+    msg: $"No flake.nix found at repo root ($repo_root)."
+  } }
+
   let repo_meta = $repo_root | path join ".jjinn"
   mkdir $repo_meta
 
@@ -184,11 +195,6 @@ def --wrapped main [
   let init_path = $repo_meta | path join "activate.sh"
   $"(render_dev_env $dev_env)\nexec \"$@\"" | save --force $init_path
 
-  let user_xdg = get_xdg_dirs $env | transpose key user
-  let sandbox_xdg = get_xdg_dirs {
-    HOME: $dev_env.variables.HOME.value
-  } | transpose key sandbox
-
   let closure_args = $closure
     | each { |path| [ "--ro-bind" $path $path ] }
     | flatten
@@ -205,16 +211,33 @@ def --wrapped main [
   } else { ["--dev", "/dev"] }
 
   let xdg_args = if $env.XDG_NAME? != null {
+    let user_xdg = get_xdg_dirs $env | transpose key user
+    let sandbox_xdg = get_xdg_dirs {
+      HOME: $dev_env.variables.HOME.value
+    } | transpose key sandbox
+
     $user_xdg
       | join $sandbox_xdg key
       | compact --empty
       | each {|r| [
-          "--bind"
-          ($r.user | path join $env.XDG_NAME)
-          ($r.sandbox | path join $env.XDG_NAME)
-        ]}
+        "--bind-try"
+        ($r.user | path join $env.XDG_NAME)
+        ($r.sandbox | path join $env.XDG_NAME)
+      ]}
       | flatten
   } else { [] }
+
+  let user_home = $env.HOME
+  let sandbox_home = $dev_env.variables.HOME.value
+
+  let addl_bind_args = $env.HOME_BINDS?
+    | default []
+    | each { |path| [
+      "--bind-try"
+      ($user_home | path join $path)
+      ($sandbox_home | path join $path)
+    ]}
+    | flatten
 
   let bwrap_args = {|worktree|
     [
@@ -232,13 +255,14 @@ def --wrapped main [
     | append $net_args
     | append $dev_args
     | append $xdg_args
+    | append $addl_bind_args
     | append $shell_path
     | append $init_path
     | append $exec
   }
-  if $debug {
+  if $print_bwrap {
     print (do $bwrap_args "<worktree>")
   } else {
-    edit_worktree $revset {|worktree| ^bwrap ...(do $bwrap_args $worktree) }
+    edit_worktree $repo_root $revision {|worktree| ^bwrap ...(do $bwrap_args $worktree) }
   }
 }

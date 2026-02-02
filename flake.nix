@@ -19,6 +19,7 @@
           executable,
           xdgName ? executable.mainProgram,
           sandboxInputs ? [ ],
+          homeBinds ? [],
         }:
         let
           inherit (nixpkgs) lib;
@@ -51,6 +52,7 @@
                 --prefix PATH : ${lib.makeBinPath [ pkgs.nushell ]} \
                 --set SANDBOX_INPUTS "${lib.concatStringsSep "\n" sandboxInputsFinal}" \
                 --set FALLBACK_BASH "${lib.getExe pkgs.bash}" \
+                --set HOME_BINDS "${lib.concatStringsSep "\n" homeBinds}" \
                 --set DEFAULT_EXE "${executable}" \
                 --set XDG_NAME "${xdgName}"
           '';
@@ -64,16 +66,17 @@
             executable = lib.getExe pkgsFor.${system}.opencode;
             xdgName = "opencode";
             sandboxInputs = with pkgsFor.${system}; [
-              pkgs.opencode
-              pkgs.nix
-              pkgs.coreutils
-              pkgs.curl
-              pkgs.which
-              pkgs.findutils
-              pkgs.diffutils
-              pkgs.gnupatch
-              pkgs.gnugrep
+              opencode
+              nix
+              coreutils
+              curl
+              which
+              findutils
+              diffutils
+              gnupatch
+              gnugrep
             ];
+            homeBinds = [ ".bun/install/cache" ];
           };
         in
         {
