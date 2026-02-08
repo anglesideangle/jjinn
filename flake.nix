@@ -23,7 +23,7 @@
         }:
         let
           inherit (nixpkgs) lib;
-          sandboxInputsFinal = sandboxInputs ++ [ pkgs.bash ];
+          sandboxInputsFinal = sandboxInputs ++ [ pkgs.bash pkgs.cacert ];
         in
         pkgs.stdenvNoCC.mkDerivation {
           name = "jjinn";
@@ -58,6 +58,7 @@
             wrapProgram $out/bin/jjinn \
                 --prefix PATH : ${lib.makeBinPath [ pkgs.nushell ]} \
                 --set SANDBOX_INPUTS "${lib.concatStringsSep "\n" sandboxInputsFinal}" \
+                --set CA_DIR "${pkgs.cacert}/etc/ssl/certs" \
                 --set FALLBACK_BASH "${lib.getExe pkgs.bash}" \
                 --set HOME_BINDS "${lib.concatStringsSep "\n" homeBinds}" \
                 --set XDG_BINDS "${lib.concatStringsSep "\n" xdgBinds}" \

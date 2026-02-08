@@ -152,7 +152,6 @@ def get_xdg_dirs [environment: record] {
 # `flake.nix` and the specified jj revision.
 @example "Edit from the current revision" {jjinn}
 @example "Edit from the previous commit in `./project` using the `my-package` devshell output" {jjinn @- --repo project --devshell "my-package"}
-@example "Debug using an interactive shell inside the sandbox" {jjinn @ -- "bash" "-i"}
 def main [
   revision: string = @, # The parent revision of the the worktree environment.
   --repo (-R): path, # The repository to operate on. It must contain a top level
@@ -186,7 +185,7 @@ def main [
 
   if $env_result.exit_code != 0 {
     error make {
-      msg: "Nix print-dev-env failed"
+      msg: "nix print-dev-env failed."
       label: {
         text: $"devshell=($devshell) profile=($profile)"
         span: (metadata $env_result).span
@@ -218,12 +217,16 @@ def main [
     | each { |path| [ "--ro-bind" $path $path ] }
     | flatten
 
-  let net_args = if $network { [
-    "--share-net"
-    "--ro-bind" "/etc/resolv.conf" "/etc/resolv.conf"
-    "--ro-bind" "/etc/hosts" "/etc/hosts"
-    "--overlay-src" "/etc/ssl" "--tmp-overlay" "/etc/ssl"
-  ] } else { [] }
+  let net_args = if $network {
+    let ca_certs = $env.CA_DIR | path join "ca-bundle.crt"
+    [
+      "--share-net"
+      "--ro-bind" "/etc/resolv.conf" "/etc/resolv.conf"
+      "--ro-bind" "/etc/hosts" "/etc/hosts"
+      "--setenv" "SSL_CERT_FILE" $ca_certs
+      "--setenv" "NIX_SSL_CERT_FILE" $ca_certs
+    ]
+  } else { [] }
 
   let dev_args = if $dev {
     ["--dev-bind", "/dev", "/dev"]
@@ -279,6 +282,7 @@ def main [
       "--ro-bind" $repo_root $repo_root
       "--bind" ($repo_root | path join ".jj") ($repo_root | path join ".jj")
       "--bind-try" ($repo_root | path join ".git") ($repo_root | path join ".git")
+      "--overlay-src" "/nix/var/nix" "--tmp-overlay" "/nix/var/nix"
     ]
     | append $closure_args
     | append $net_args
@@ -289,6 +293,7 @@ def main [
     | append $init_path
     | append $exec
   }
+
   if $print_bwrap {
     print (do $bwrap_args "<worktree>")
   } else {
