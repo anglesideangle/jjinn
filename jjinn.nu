@@ -83,13 +83,35 @@ def edit_worktree [
   revset: string, # The jj revset to create the worktree from.
   command: closure, # The closure to call with the constructed worktree's path.
 ]: nothing -> nothing {
-
   let short_id = (revset_id $repo $revset)
   let worktree = (mktemp --tmpdir --directory)
 
   # Ensure the workspace syncs with the main repo, then delete the workspace.
   let cleanup = {
     jj status --repository $worktree | complete | ignore
+    let diff_result = (
+      ^jj diff
+        --repository $worktree
+        -r @-
+        --summary
+      | complete
+    )
+    if ($diff_result.exit_code == 0) and (($diff_result.stdout | str trim) == "") {
+      let wc_result = (
+        ^jj log
+          --repository $worktree
+          -r @
+          --no-graph
+          --template "commit_id\n"
+        | complete
+      )
+      if $wc_result.exit_code == 0 {
+        let worktree_wc_id = $wc_result.stdout | str trim
+        if ($worktree_wc_id | str length) > 0 {
+          ^jj abandon --repository $repo $worktree_wc_id | ignore
+        }
+      }
+    }
     ^jj workspace forget --repository $repo $short_id | ignore
     rm -r $worktree | ignore
   }
@@ -98,7 +120,7 @@ def edit_worktree [
     ^jj workspace add --repository $repo --name $short_id --revision $revset $worktree
     do $command $worktree
   } catch {|err|
-    $cleanup
+    do $cleanup
     error make {
       msg: "An error occurred while inside the worktree."
       inner: [$err]
