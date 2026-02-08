@@ -60,13 +60,13 @@ def nix_closure [...anchors: string] {
   nix path-info --recursive ...$anchors | lines
 }
 
-# Returns a single revision id from a revset string.
+# Returns a single full revision id from a revset string.
 def revset_id [repo: path, revset: string] {
   let ids = (^jj log
     --repository $repo
     -r $revset
     --no-graph
-    --template "commit_id.short() ++ \"\\n\""
+    --template "commit_id ++ \"\\n\""
   ) | lines
   if ($ids | length) != 1 { error make {
     msg: $"Revset ($revset) must resolve to exactly one commit."
@@ -83,8 +83,9 @@ def edit_worktree [
   revset: string, # The jj revset to create the worktree from.
   command: closure, # The closure to call with the constructed worktree's path.
 ]: nothing -> nothing {
-  let short_id = (revset_id $repo $revset)
-  let worktree = (mktemp --tmpdir --directory)
+  let worktree = (mktemp --tmpdir --directory jjinn-XXXX)
+  let base_id = (revset_id $repo $revset)
+  let workspace_id = ($worktree | path basename)
 
   # Ensure the workspace syncs with the main repo, then delete the workspace.
   let cleanup = {
@@ -92,32 +93,29 @@ def edit_worktree [
     let diff_result = (
       ^jj diff
         --repository $worktree
-        -r @-
+        --from $base_id
         --summary
       | complete
     )
-    if ($diff_result.exit_code == 0) and (($diff_result.stdout | str trim) == "") {
+    if ($diff_result.exit_code == 0) and ($diff_result.stdout | is-empty) {
       let wc_result = (
         ^jj log
           --repository $worktree
           -r @
           --no-graph
-          --template "commit_id\n"
+          --template "commit_id"
         | complete
       )
-      if $wc_result.exit_code == 0 {
-        let worktree_wc_id = $wc_result.stdout | str trim
-        if ($worktree_wc_id | str length) > 0 {
-          ^jj abandon --repository $repo $worktree_wc_id | ignore
-        }
+      if ($wc_result.exit_code == 0) and ($wc_result.stdout | is-not-empty) {
+        ^jj abandon --repository $repo $wc_result.stdout | ignore
       }
     }
-    ^jj workspace forget --repository $repo $short_id | ignore
+    ^jj workspace forget --repository $repo $workspace_id | ignore
     rm -r $worktree | ignore
   }
 
   try {
-    ^jj workspace add --repository $repo --name $short_id --revision $revset $worktree
+    ^jj workspace add --repository $repo --name $workspace_id --revision $revset $worktree
     do $command $worktree
   } catch {|err|
     do $cleanup
