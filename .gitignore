@@ -6,3 +6,5 @@
 !flake.nix
 !flake.lock
 !jjinn.nu
+!pi-agent
+!pi-agent/*

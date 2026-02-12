@@ -17,13 +17,16 @@
         pkgs:
         {
           executable,
-          sandboxInputs ? [],
-          homeBinds ? [],
-          xdgBinds ? [],
+          sandboxInputs ? [ ],
+          homeBinds ? [ ],
+          xdgBinds ? [ ],
         }:
         let
           inherit (nixpkgs) lib;
-          sandboxInputsFinal = sandboxInputs ++ [ pkgs.bash pkgs.cacert ];
+          sandboxInputsFinal = sandboxInputs ++ [
+            pkgs.bash
+            pkgs.cacert
+          ];
         in
         pkgs.stdenvNoCC.mkDerivation {
           name = "jjinn";
@@ -70,6 +73,7 @@
         system:
         let
           inherit (nixpkgs) lib;
+          pi-coding-agent = pkgsFor.${system}.callPackage ./pi-agent { };
           jjinn-opencode = self.lib.makeJjinn pkgsFor.${system} {
             executable = lib.getExe pkgsFor.${system}.opencode;
             sandboxInputs = with pkgsFor.${system}; [
@@ -86,10 +90,24 @@
             xdgBinds = [ "opencode" ];
             homeBinds = [ ".bun" ];
           };
+          jjinn-pi = self.lib.makeJjinn pkgsFor.${system} {
+            executable = lib.getExe self.packages.${system}.pi-coding-agent;
+            sandboxInputs = with pkgsFor.${system}; [
+              self.packages.${system}.pi-coding-agent
+              nix
+              coreutils
+              curl
+              which
+              fd
+              ripgrep
+            ];
+            homeBinds = [ ".pi" ];
+          };
         in
         {
+          inherit pi-coding-agent;
           inherit jjinn-opencode;
-          default = jjinn-opencode;
+          default = jjinn-pi;
         }
       );
 
