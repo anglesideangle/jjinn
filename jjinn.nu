@@ -7,6 +7,22 @@ def --wrapped nix [...args: string] {
     ...$args)
 }
 
+def --wrapped jj [...args: string] {
+  let result = (^jj ...$args | complete)
+  if ($result.stdout | is-not-empty) {
+    $result.stdout | lines | each {|line| print $">>> ($line)" }
+  }
+  if ($result.stderr | is-not-empty) {
+    $result.stderr | lines | each {|line| print $">>> ($line)" }
+  }
+  if $result.exit_code != 0 {
+    error make {
+      msg: "jj command failed."
+      help: $result.stderr
+    }
+  }
+}
+
 # Safely quote bash string
 def sh_quote [s: string] {
   if ($s | str contains "'") {
@@ -89,7 +105,7 @@ def edit_worktree [
 
   # Ensure the workspace syncs with the main repo, then delete the workspace.
   let cleanup = {
-    jj status --repository $worktree | complete | ignore
+    ^jj status --repository $worktree | complete | ignore
     let diff_result = (
       ^jj diff
         --repository $worktree
@@ -115,7 +131,7 @@ def edit_worktree [
   }
 
   try {
-    ^jj workspace add --repository $repo --name $workspace_id --revision $revset $worktree
+    jj workspace add --repository $repo --name $workspace_id --revision $revset $worktree
     do $command $worktree
   } catch {|err|
     do $cleanup
