@@ -111,15 +111,16 @@
         }
       );
 
-      devShells.default = forAllSystems (
-        system:
-        pkgsFor.${system}.mkShellNoCC {
-          inputsFrom = [ self.packages.default ];
+      devShells = forAllSystems (system: {
+        default = pkgsFor.${system}.mkShellNoCC {
+          inputsFrom = [ self.packages.${system}.default ];
           packages = [
-            self.formatter
+            self.formatter.${system}
+            pkgsFor.${system}.jujutsu
+            pkgsFor.${system}.bubblewrap
           ];
-        }
-      );
+        };
+      });
 
       formatter = forAllSystems (
         system:

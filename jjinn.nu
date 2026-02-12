@@ -78,16 +78,12 @@ def nix_closure [...anchors: string] {
 
 # Returns a single full revision id from a revset string.
 def revset_id [repo: path, revset: string] {
-  let ids = (^jj log
+  (^jj log
     --repository $repo
     -r $revset
     --no-graph
-    --template "commit_id ++ \"\\n\""
-  ) | lines
-  if ($ids | length) != 1 { error make {
-    msg: $"Revset ($revset) must resolve to exactly one commit."
-  } }
-  $ids | first
+    --template "commit_id"
+  ) | complete | get stdout
 }
 
 # Runs the provided `command` inside a temporary worktree.
@@ -105,28 +101,29 @@ def edit_worktree [
 
   # Ensure the workspace syncs with the main repo, then delete the workspace.
   let cleanup = {
-    ^jj status --repository $worktree | complete | ignore
-    let diff_result = (
+    let commit_id = do -i { revset_id $worktree @ }
+
+    let has_changes = (
       ^jj diff
         --repository $worktree
         --from $base_id
         --summary
-      | complete
-    )
-    if ($diff_result.exit_code == 0) and ($diff_result.stdout | is-empty) {
-      let wc_result = (
-        ^jj log
-          --repository $worktree
-          -r @
-          --no-graph
-          --template "commit_id"
-        | complete
-      )
-      if ($wc_result.exit_code == 0) and ($wc_result.stdout | is-not-empty) {
-        ^jj abandon --repository $repo $wc_result.stdout | ignore
-      }
+    ) | complete
+      | get stdout
+      | is-not-empty
+
+    if $has_changes {
+      print "Temporary workspace changes are now in:"
+      (jj log
+        --repository $repo
+        --color always
+        --limit 1
+        -r $commit_id)
+    } else {
+      jj abandon --repository $repo $commit_id | ignore
     }
-    ^jj workspace forget --repository $repo $workspace_id | ignore
+
+    jj workspace forget --repository $repo $workspace_id | ignore
     rm -r $worktree | ignore
   }
 
@@ -177,11 +174,7 @@ def main [
   --network = true, # Whether to allow network access from the sandbox.
   --dev = false, # Whether to mount devices into the sandbox.
   --print-bwrap, # Prints the bwrap command instead of executing it.
-  --interactive (-i), # Enters an interactive shell inside the sandbox instead
-  # of the default executable.
 ]: nothing -> nothing {
-  let exec = if $interactive { [ "bash" "-i" ] } else { [ $env.EXECUTABLE ] };
-
   let repo_root = if $repo == null {
     ^jj root | str trim
   } else {
@@ -307,7 +300,7 @@ def main [
     | append $home_bind_args
     | append $shell_path
     | append $init_path
-    | append $exec
+    | append [ $env.EXECUTABLE ]
   }
 
   if $print_bwrap {
