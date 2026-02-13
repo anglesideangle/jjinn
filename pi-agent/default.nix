@@ -16,17 +16,17 @@
 
 buildNpmPackage (finalAttrs: {
   pname = "pi-coding-agent";
-  version = "v0.52.9";
+  version = "v0.52.12";
   nodejs = nodejs_22;
 
   src = fetchFromGitHub {
     owner = "badlogic";
     repo = "pi-mono";
     rev = finalAttrs.version;
-    hash = "sha256-EG3fDjIGniwKkGFcmFWe99AJ43fNgJYc4rDEaww5scQ=";
+    hash = "sha256-SJCnibEcfUBVmCOS/eOFIFWjN92IDd/DnM7lBEVy7+k=";
   };
 
-  npmDepsHash = "sha256-U99zVG7XMkwqzAhJlBghWDBQEn3FMfSUHIfqk6o2C3U=";
+  npmDepsHash = "sha256-OqVji8bRt/TRvtTnkGBzGTMBXTX3LwxdpSeZcC82vmI=";
   npmWorkspace = "packages/coding-agent";
   npmPackFlags = [ "--workspace=@mariozechner/pi-coding-agent" ];
   npmInstallFlags = [ "--ignore-scripts" ];

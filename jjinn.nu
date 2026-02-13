@@ -1,26 +1,15 @@
 #!/usr/bin/env nu
 
-def --wrapped nix [...args: string] {
+def --wrapped nix [...args: string]: nothing -> string {
   (^nix
     --option warn-dirty "false"
     --extra-experimental-features "nix-command flakes"
     ...$args)
 }
 
-def --wrapped jj [...args: string] {
-  let result = (^jj ...$args | complete)
-  if ($result.stdout | is-not-empty) {
-    $result.stdout | lines | each {|line| print $">>> ($line)" }
-  }
-  if ($result.stderr | is-not-empty) {
-    $result.stderr | lines | each {|line| print $">>> ($line)" }
-  }
-  if $result.exit_code != 0 {
-    error make {
-      msg: "jj command failed."
-      help: $result.stderr
-    }
-  }
+def display []: record -> nothing {
+  $in.stdout | lines | each {|line| print $">>> ($line)"}
+  $in.stderr | lines | each {|line| print -e $">>> ($line)"}
 }
 
 # Safely quote bash string
@@ -71,14 +60,9 @@ def render_dev_env [dev_env: record] {
   ($var_lines | append $fn_lines | str join "\n") + "\n"
 }
 
-# Returns the closure of a list of nix derivations as a list of paths.
-def nix_closure [...anchors: string] {
-  nix path-info --recursive ...$anchors | lines
-}
-
 # Returns a single full revision id from a revset string.
 def revset_id [repo: path, revset: string] {
-  (^jj log
+  (jj log
     --repository $repo
     -r $revset
     --no-graph
@@ -101,16 +85,13 @@ def edit_worktree [
 
   # Ensure the workspace syncs with the main repo, then delete the workspace.
   let cleanup = {
-    let commit_id = do -i { revset_id $worktree @ }
+    let commit_id = revset_id $worktree @
 
-    let has_changes = (
-      ^jj diff
-        --repository $worktree
-        --from $base_id
-        --summary
-    ) | complete
-      | get stdout
-      | is-not-empty
+    let has_changes = (jj diff
+      --repository $worktree
+      --from $base_id
+      --summary
+    ) | is-not-empty
 
     if $has_changes {
       print "Temporary workspace changes are now in:"
@@ -118,27 +99,31 @@ def edit_worktree [
         --repository $repo
         --color always
         --limit 1
-        -r $commit_id)
+        -r $commit_id
+      ) | complete | display
     } else {
-      jj abandon --repository $repo $commit_id | ignore
+      jj abandon --repository $repo $commit_id | complete | display
     }
 
-    jj workspace forget --repository $repo $workspace_id | ignore
+    jj workspace forget --repository $repo $workspace_id | complete
     rm -r $worktree | ignore
   }
 
   try {
-    jj workspace add --repository $repo --name $workspace_id --revision $revset $worktree
+    (jj workspace add
+      --repository $repo
+      --name $workspace_id
+      --revision $revset $worktree) | complete | display
     do $command $worktree
   } catch {|err|
-    do $cleanup
+    do --ignore-errors $cleanup
     error make {
       msg: "An error occurred while inside the worktree."
       inner: [$err]
     }
   }
 
-  do $cleanup
+  do --ignore-errors $cleanup
 }
 
 # Prepends the provided list of binaries to a path string delimiteed by `:`
@@ -176,7 +161,7 @@ def main [
   --print-bwrap, # Prints the bwrap command instead of executing it.
 ]: nothing -> nothing {
   let repo_root = if $repo == null {
-    ^jj root | str trim
+    do -c { jj root }
   } else {
     $repo
   } | path expand
@@ -190,24 +175,16 @@ def main [
   mkdir $repo_meta
 
   let profile = $repo_meta | path join "profile"
-  mut env_result = (nix print-dev-env --json --profile $profile $"($repo_root)#($devshell)") | complete
 
-  if $env_result.exit_code != 0 {
-    error make {
-      msg: "nix print-dev-env failed."
-      label: {
-        text: $"devshell=($devshell) profile=($profile)"
-        span: (metadata $env_result).span
-      }
-      help: $env_result.stderr
-    }
-  }
-
-  mut dev_env = $env_result.stdout | from json
+  # TODO this split is needed because no pipefail behavior by default yet
+  # https://github.com/nushell/nushell/issues/16760
+  # https://github.com/nushell/nushell/pull/16449
+  let dev_env_raw =  nix print-dev-env --json --profile $profile $"($repo_root)#($devshell)"
+  mut dev_env = $dev_env_raw | from json
 
   let anchor = (^readlink --canonicalize $profile) | str trim
   let sandbox_inputs = $env.SANDBOX_INPUTS? | default "" | lines
-  let closure = nix_closure $anchor ...$sandbox_inputs
+  let closure = nix path-info --recursive $anchor ...$sandbox_inputs
 
   let shell_path = (
     match $dev_env.variables.SHELL.value? {
@@ -223,6 +200,7 @@ def main [
   $"(render_dev_env $dev_env)\nexec \"$@\"" | save --force $init_path
 
   let closure_args = $closure
+    | lines
     | each { |path| [ "--ro-bind" $path $path ] }
     | flatten
 
